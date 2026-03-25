@@ -102,6 +102,25 @@ namespace NuGet.Commands
             // Virtual root for file globbing
             var rootDirectory = new VirtualFileInfo(SingleFileProvider.RootDir, isDirectory: true);
 
+            // Pre-compute globbing directories once per file to avoid repeated Substring,
+            // SingleFileProvider, and FileProviderGlobbingDirectory allocations in the N*M nested loop below.
+            Dictionary<string, FileProviderGlobbingDirectory> globbingDirectories = null;
+            if (nuspecContentFiles.Count > 0)
+            {
+                globbingDirectories = new Dictionary<string, FileProviderGlobbingDirectory>(entryMappings.Count, StringComparer.OrdinalIgnoreCase);
+                foreach (var file in entryMappings.Keys)
+                {
+                    if (file.Length > rootFolderPathLength)
+                    {
+                        var relativePath = file.Substring(rootFolderPathLength, file.Length - rootFolderPathLength);
+                        globbingDirectories[file] = new FileProviderGlobbingDirectory(
+                            fileProvider: new SingleFileProvider(relativePath),
+                            fileInfo: rootDirectory,
+                            parent: null);
+                    }
+                }
+            }
+
             // Apply all nuspec property mappings to the files returned by content model
             foreach (var filesEntry in nuspecContentFiles)
             {
@@ -124,17 +143,9 @@ namespace NuGet.Commands
                     Debug.Assert(file.StartsWith(ContentFilesFolderName, StringComparison.OrdinalIgnoreCase),
                         "invalid file path: " + file);
 
-                    // All files should begin with the same root folder
-                    if (file.Length > rootFolderPathLength)
+                    // Reuse the pre-computed globbing directory instead of allocating new strings and objects
+                    if (globbingDirectories.TryGetValue(file, out var globbingDirectory))
                     {
-                        var relativePath = file.Substring(rootFolderPathLength, file.Length - rootFolderPathLength);
-
-                        // Check if the nuspec group include/exclude patterns apply to the file
-                        var globbingDirectory = new FileProviderGlobbingDirectory(
-                            fileProvider: new SingleFileProvider(relativePath),
-                            fileInfo: rootDirectory,
-                            parent: null);
-
                         // Currently Matcher only returns the file name not the full path, each file must be
                         // check individually.
                         var matchResults = matcher.Execute(globbingDirectory);
